@@ -2,10 +2,10 @@ name: Java CI with Maven
 on:
   pull_request:
     branches:
-    - my_trigger
+    - main
   push:
     branches:
-    - my_trigger
+    - main
 jobs:
   build:
     runs-on: my_agent
