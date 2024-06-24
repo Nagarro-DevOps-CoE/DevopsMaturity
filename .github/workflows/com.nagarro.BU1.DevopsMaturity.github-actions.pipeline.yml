@@ -12,7 +12,7 @@ on:
 jobs:
   junit:
     name: Unit Test
-    runs-on: windows-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -35,7 +35,7 @@ jobs:
 
   maven:
     name: Build
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: junit
     steps:
       - name: Checkout
@@ -53,7 +53,7 @@ jobs:
 
   sonar:
     name: Sonar Analysis
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: maven
     steps:
       - name: Checkout
@@ -74,7 +74,7 @@ jobs:
 
   artifactory:
     name: Upload to Artifactory
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: sonar
     steps:
       - name: Checkout
@@ -84,7 +84,7 @@ jobs:
         run: |
           mvn -f mvcapp/pom.xml package
           curl -X PUT -u "$JF_USERNAME:$JF_PASSWORD" \ 
-          -T app-name/target/app-name.war "$JF_URL/demo-repo/dev/app-name.war"
+          -T app-name/target/app-name.war "$JF_URL/repo-1/dev/app-name.war"
         env:
           JF_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
           JF_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
@@ -92,7 +92,7 @@ jobs:
 
   docker-image:
     name: Docker Image Build and Push
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: artifactory
     steps:
       - name: Checkout
@@ -109,15 +109,15 @@ jobs:
           --build-arg="ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" \ 
           --build-arg="ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" \ 
           --build-arg="ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" \ 
-          -t ${{ secrets.DOCKER_REGISTRY_URL }}/docker-repo:${{ github.run_number }} . 
+          -t ${{ secrets.DOCKER_REGISTRY_URL }}/demo-repo:${{ github.run_number }} . 
 
       - name: Push Image to Docker Registry
         run: |
-          docker push ${{ secrets.DOCKER_REGISTRY_URL }}/docker-repo:${{ github.run_number }}
+          docker push ${{ secrets.DOCKER_REGISTRY_URL }}/demo-repo:${{ github.run_number }}
 
   docker-run:
     name: Docker Image Deployment
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: docker-image
     steps:
       - name: Checkout
@@ -135,17 +135,17 @@ jobs:
       - name: Run the Container
         run: |
           docker run -d -p 9010:8080 --name mvcapp \ 
-          ${{ secrets.DOCKER_REGISTRY_URL }}/docker-repo:${{ github.run_number }}
+          ${{ secrets.DOCKER_REGISTRY_URL }}/demo-repo:${{ github.run_number }}
 
   monitor:
-    name: Monitoring Using Dockprom
-    runs-on: windows-latest
+    name: Monitoring Using Prometheus and Grafana
+    runs-on: macos-latest
     needs: docker-run
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Dockprom
+      - name: Setup
         run: |
           git clone ${{ vars.DOCKPROM_REPO_URL }} && cd dockprom
           ADMIN_USER='$CADDY_USER' ADMIN_PASSWORD='$CADDY_PASSWORD' ADMIN_PASSWORD_HASH='$CADDY_PASSWORD_HASH'
@@ -157,7 +157,7 @@ jobs:
 
   selenium:
     name: Selenium Automation Test
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: monitor
     steps:
       - name: Checkout
@@ -169,7 +169,7 @@ jobs:
           export M2_HOME=/opt/maven-3.9.6/ 
           export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin 
           mvn -f selenium-testing/pom.xml test -Dmaven.test.failure.ignore=true \ 
-          -Dhostname=192.168.56.101 -Dport=9010 -Dcontext=/mvcapp/calculate
+          -Dhostname=192.168.56.102 -Dport=9010 -Dcontext=/mvcapp/calculate
 
       - name: Upload Selenium Test Report
         uses: actions/upload-artifact@v3
@@ -179,7 +179,7 @@ jobs:
 
   jmeter:
     name: JMeter Performance Test
-    runs-on: windows-latest
+    runs-on: macos-latest
     needs: selenium
     steps:
       - name: Checkout
@@ -192,7 +192,7 @@ jobs:
           export JMETER_HOME=/opt/apache-jmeter-5.6.3/ 
           export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin:$JMETER_HOME/bin 
           mvn -f jmeter-testing/pom.xml clean verify -Dmaven.test.failure.ignore=true \ 
-          -Dhostname=192.168.56.101 -Dport=9010 -Dcontext=/mvcapp/calculate
+          -Dhostname=192.168.56.102 -Dport=9010 -Dcontext=/mvcapp/calculate
 
       - name: Upload JMeter Performance Test Report
         uses: actions/upload-artifact@v3
