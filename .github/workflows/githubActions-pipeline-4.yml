@@ -1,0 +1,191 @@
+name: CI Workflow 
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+  push:
+    branches: [ "main" ] 
+
+  workflow_dispatch:
+
+jobs:
+  junit:
+    name: Unit Test
+    runs-on: centos-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Unit Test
+        run: mvn -f mvcapp/pom.xml -Dmaven.test.failure.ignore=true test
+
+      - name: Upload JUnit Test Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: JUnit Test Report
+          path: mvcapp/target/surefire-reports/TEST-*.xml
+
+  maven:
+    name: Build
+    runs-on: centos-1
+    needs: junit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build Project
+        run: mvn -f mvcapp/pom.xml clean install -Dmaven.test.failure.ignore=True
+
+  sonar:
+    name: Sonar Analysis
+    runs-on: centos-1
+    needs: maven
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+    - name: Sonar Analysis
+        run: |
+          mvn -f mvcapp/pom.xml clean verify sonar:sonar \ 
+          -Dsonar.projectKey=your-project-key \ 
+          -Dsonar.sources=src/main/java \ 
+          -Dsonar.tests=src/test/java \ 
+          -Dsonar.java.binaries=target/classes \ 
+          -Dsonar.coverage.jacoco.xmlReportPaths=**/jacoco.xml
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  artifactory:
+    name: Upload to Artifactory
+    runs-on: centos-1
+    needs: sonar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Upload to Artifactory
+        run: |
+          mvn -f mvcapp/pom.xml package
+          curl -X PUT -u "$JF_USERNAME:$JF_PASSWORD" \ 
+          -T mvcapp/target/mvcapp.war "$JF_URL/mvc-app/dev/mvcapp.war"
+        env:
+          JF_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+          JF_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          JF_URL: ${{ secrets.ARTIFACTORY_URL }}
+
+  docker-image:
+    name: Docker Image Creation
+    runs-on: centos-1
+    needs: artifactory
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Registry
+        run: |
+          docker login ${{ secrets.DOCKER_REGISTRY_URL }} -u ${{ secrets.DOCKER_REGISTRY_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+
+      - name: Build Docker Image
+        run: |
+          cd mvcapp
+          docker build \ 
+          --build-arg="ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" \ 
+          --build-arg="ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" \ 
+          --build-arg="ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" \ 
+          -t ${{ secrets.DOCKER_REGISTRY_URL }}/vikrant/demo-app:${{ github.run_number }} . 
+
+  docker-push:
+    name: Docker Image Push
+    runs-on: centos-1
+    needs: docker-image
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Push Image to Docker Registry
+        run: |
+          docker push ${{ secrets.DOCKER_REGISTRY_URL }}/vikrant/demo-app:${{ github.run_number }}
+
+  docker-run:
+    name: Docker Image Deployment
+    runs-on: centos-1
+    needs: docker-push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Pre Docker Run
+        run: |
+          docker ps -q -a --filter name="^myapp$" | xargs -r docker stop myapp || true
+          docker ps -q -a --filter name="^myapp$" | xargs -r docker rm myapp || true
+
+      - name: Run the Container
+        run: |
+          docker run -d -p 9010:8080 --name myapp \ 
+          ${{ secrets.DOCKER_REGISTRY_URL }}/vikrant/demo-app:${{ github.run_number }}
+
+  monitor:
+    name: Monitoring Using Dockprom
+    runs-on: centos-1
+    needs: docker-run
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Dockprom
+        run: |
+          git clone ${{ vars.DOCKPROM_REPO_URL }} && cd dockprom
+          ADMIN_USER='$CADDY_USER' ADMIN_PASSWORD='$CADDY_PASSWORD' ADMIN_PASSWORD_HASH='$CADDY_PASSWORD_HASH'
+          docker compose up -d
+        env:
+          CADDY_USER: ${{ secrets.CADDY_USER }}
+          CADDY_PASSWORD: ${{ secrets.CADDY_PASSWORD }}
+          CADDY_PASSWORD_HASH: ${{ secrets.CADDY_PASSWORD_HASH }}
+
+  selenium:
+    name: Selenium Automation Test
+    runs-on: centos-1
+    needs: monitor
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Run Selenium Tests
+        run: | 
+          export JAVA_HOME=/opt/jdk-17/ 
+          export M2_HOME=/opt/maven-3.9.6/ 
+          export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin 
+          mvn -f selenium-testing/pom.xml test -Dmaven.test.failure.ignore=true \ 
+          -Dhostname=192.168.56.102 -Dport=9010 -Dcontext=/mvcapp/calculate
+
+      - name: Upload Selenium Test Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: Selenium Test Report
+          path: selenium-testing/target/surefire-reports/emailable-report.html
+
+  jmeter:
+    name: JMeter Performance Test
+    runs-on: centos-1
+    needs: selenium
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Run JMeter Tests
+        run: | 
+          export JAVA_HOME=/opt/jdk-17/ 
+          export M2_HOME=/opt/maven-3.9.6/ 
+          export JMETER_HOME=/opt/apache-jmeter-5.6.3/ 
+          export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin:$JMETER_HOME/bin 
+          mvn -f jmeter-testing/pom.xml clean verify -Dmaven.test.failure.ignore=true \ 
+          -Dhostname=192.168.56.102 -Dport=9010 -Dcontext=/mvcapp/calculate
+
+      - name: Upload JMeter Performance Test Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: JMeter Performance Test Report
+          path: jmeter-testing/target/jmeter/reports
+
