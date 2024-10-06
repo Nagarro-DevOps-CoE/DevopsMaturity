@@ -2,8 +2,8 @@ name: CI Workflow
 on:
   pull_request:
     branches:
-    - string
+    - main
   push:
     branches:
-    - string
+    - main
 jobs: {}
