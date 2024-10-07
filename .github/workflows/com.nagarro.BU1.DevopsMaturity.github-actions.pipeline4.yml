@@ -20,4 +20,4 @@ jobs:
         distribution: temurin
         cache: maven
     - name: Build Project
-      run: mvn -f kk/pom.xml clean install -Dmaven.test.failure.ignore=true
+      run: mvn clean install -Dmaven.test.failure.ignore=true
